@@ -202,7 +202,14 @@ class ParallelCrossAttention(nn.Module):
 
         self.hidden_size = hidden_size
         self.total_num_heads = num_heads
-        self.num_heads = divide(num_heads,comm_group.world_size)
+
+        tp_size = comm_group.world_size
+        if tp_size >= num_heads:
+            self.num_heads = 1
+            self.num_head_replicas = divide(tp_size, self.total_num_heads)
+        else:
+            self.num_heads = divide(self.total_num_heads, tp_size)
+            self.num_head_replicas = 1
         self.head_dim = head_dim
 
         self.source = source
