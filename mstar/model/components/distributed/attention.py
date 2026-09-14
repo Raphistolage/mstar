@@ -207,9 +207,14 @@ class ParallelCrossAttention(nn.Module):
         if tp_size >= num_heads:
             self.num_heads = 1
             self.num_head_replicas = divide(tp_size, self.total_num_heads)
+            # In this case we expect each TP to provide an output of head_dim
+            inner = head_dim * tp_size
         else:
             self.num_heads = divide(self.total_num_heads, tp_size)
             self.num_head_replicas = 1
+            # In this case we expect each TP to provide an output of head_dim * (num_heads / Tp_size)
+            inner = num_heads * head_dim
+            
         self.head_dim = head_dim
 
         self.source = source
@@ -217,7 +222,6 @@ class ParallelCrossAttention(nn.Module):
         self._context_kv_key = context_kv_key
         self.cross = None
         self.context_kv = None
-        inner = num_heads * head_dim
 
         self.q_proj = ColumnParallelLinear(
             comm_group=comm_group,
