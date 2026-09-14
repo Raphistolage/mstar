@@ -66,6 +66,7 @@ class WhisperDecoderLayer(nn.Module):
             head_dim=config.head_dim,
             cross_key=CROSS_ATTN,
             context_kv_key=CROSS_KV_CACHE,
+            num_kv_heads=config.decoder_attention_heads,
         )
         self.final_layer_norm = nn.LayerNorm(config.d_model)
         self.fc1 = nn.Linear(config.d_model, config.decoder_ffn_dim)
