@@ -30,6 +30,7 @@ from mstar.model.components.distributed.linear import (
     ColumnParallelLinear,
     QKVParallelLinear,
     RowParallelLinear,
+    KVColumnParallelLinear,
 )
 from mstar.model.components.norm import RMSNorm
 
@@ -185,6 +186,7 @@ class ParallelCrossAttention(nn.Module):
         comm_group: CommGroup | None = None,
         hidden_size: int,
         num_heads: int,
+        num_kv_heads: int | None = None,
         head_dim: int,
         q_bias: bool = True,
         k_bias: bool = False,
@@ -202,44 +204,51 @@ class ParallelCrossAttention(nn.Module):
 
         self.hidden_size = hidden_size
         self.total_num_heads = num_heads
+        # If no num_kv_heads is specified, we use num_heads.
+        self.total_num_kv_heads = num_kv_heads if num_kv_heads is not None else num_heads
 
         tp_size = comm_group.world_size
-        if tp_size >= num_heads:
-            self.num_heads = 1
-            self.num_head_replicas = divide(tp_size, self.total_num_heads)
-            # In this case we expect each TP to provide an output of head_dim
-            inner = head_dim * tp_size
-        else:
-            self.num_heads = divide(self.total_num_heads, tp_size)
-            self.num_head_replicas = 1
-            # In this case we expect each TP to provide an output of head_dim * (num_heads / Tp_size)
-            inner = num_heads * head_dim
-            
+    
+        assert num_heads >= tp_size, (
+            f"Parallel cross attention cannot handle head replication over Q."
+        )
+
+        inner = num_heads * head_dim
+        self.num_heads = divide(num_heads, tp_size)
         self.head_dim = head_dim
 
-        self.source = source
-        self._cross_key = cross_key or source
-        self._context_kv_key = context_kv_key
-        self.cross = None
-        self.context_kv = None
+        # If num_kv_heads is not specified, num_heads is the number of heads for q,k and v.
+        # It is then required to have TP_size <= num_heads; otherwise divide(tp_size, self.total_num_heads) 
+        # will raise.
+        if num_kv_heads is not None:
+            if tp_size > num_kv_heads:
+                self.num_kv_heads = 1
+                self.num_kv_head_replicas = divide(tp_size, num_kv_heads)
+            else:
+                self.num_kv_heads = divide(num_kv_heads, tp_size)
+                self.num_kv_head_replicas = 1
+        else :
+            self.num_kv_heads = self.num_heads
 
+        self.k_proj = KVColumnParallelLinear(
+            comm_group=comm_group,
+            input_size=hidden_size,
+            head_size=head_dim,
+            total_num_kv_heads=self.total_num_kv_heads,
+            bias=k_bias,
+        )
+        self.v_proj = KVColumnParallelLinear(
+            comm_group=comm_group,
+            input_size=hidden_size,
+            head_size=head_dim,
+            total_num_kv_heads=self.total_num_kv_heads,
+            bias=v_bias,
+        )
         self.q_proj = ColumnParallelLinear(
             comm_group=comm_group,
             input_size=hidden_size,
             output_size=inner,
             bias=q_bias,
-        )
-        self.k_proj = ColumnParallelLinear(
-            comm_group=comm_group,
-            input_size=hidden_size,
-            output_size=inner,
-            bias=k_bias,
-        )
-        self.v_proj = ColumnParallelLinear(
-            comm_group=comm_group,
-            input_size=hidden_size,
-            output_size=inner,
-            bias=v_bias,
         )
         self.out_proj = RowParallelLinear(
             comm_group=comm_group,
@@ -250,17 +259,23 @@ class ParallelCrossAttention(nn.Module):
             reduce_results=True,
         )
 
+        self.source = source
+        self._cross_key = cross_key or source
+        self._context_kv_key = context_kv_key
+        self.cross = None
+        self.context_kv = None
+
     def compute_kv(
         self, encoder_states: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Project the encoder context to K/V for the cross-attention pool.
 
-        ``(enc_len, hidden) -> (k, v)``, each ``(enc_len, num_heads, head_dim)``.
+        ``(enc_len, hidden) -> (k, v)``, each ``(enc_len, num_kv_heads, head_dim)``.
         Override to reshape for a model-specific pool layout.
         """
         enc_len = encoder_states.shape[0]
-        k = self.k_proj(encoder_states).view(enc_len, self.num_heads, self.head_dim)
-        v = self.v_proj(encoder_states).view(enc_len, self.num_heads, self.head_dim)
+        k = self.k_proj(encoder_states).view(enc_len, self.num_kv_heads, self.head_dim)
+        v = self.v_proj(encoder_states).view(enc_len, self.num_kv_heads, self.head_dim)
         return k, v
 
     def bind_resources(self, resources: dict) -> None:
