@@ -168,6 +168,8 @@ LLAMA_STACKED_PARAMS: list[StackedParamRule] = [
 # checkpoint stores ``q/k/v_proj`` separately; the
 # model holds fused ``qkv_proj``parameters with
 # per-shard ``weight_loader`` methods.
+# prefix ``self_attn`` is necesseray to filter out 
+# the decoder's q/k/v/qkv projs.
 WHISPER_STACKED_PARAMS: list[StackedParamRule] = [
     StackedParamRule("self_attn.qkv_proj",     "self_attn.q_proj",    "q"),
     StackedParamRule("self_attn.qkv_proj",     "self_attn.k_proj",    "k"),
