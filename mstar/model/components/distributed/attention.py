@@ -28,9 +28,9 @@ from mstar.distributed.utils import divide
 from mstar.engine.resources.convenience import AttentionCallable
 from mstar.model.components.distributed.linear import (
     ColumnParallelLinear,
+    KVColumnParallelLinear,
     QKVParallelLinear,
     RowParallelLinear,
-    KVColumnParallelLinear,
 )
 from mstar.model.components.norm import RMSNorm
 
@@ -208,9 +208,9 @@ class ParallelCrossAttention(nn.Module):
         self.total_num_kv_heads = num_kv_heads if num_kv_heads is not None else num_heads
 
         tp_size = comm_group.world_size
-    
+
         assert num_heads >= tp_size, (
-            f"Parallel cross attention cannot handle head replication over Q."
+            "Parallel cross attention cannot handle head replication over Q."
         )
 
         inner = num_heads * head_dim
@@ -218,7 +218,7 @@ class ParallelCrossAttention(nn.Module):
         self.head_dim = head_dim
 
         # If num_kv_heads is not specified, num_heads is the number of heads for q,k and v.
-        # It is then required to have TP_size <= num_heads; otherwise divide(tp_size, self.total_num_heads) 
+        # It is then required to have TP_size <= num_heads; otherwise divide(tp_size, self.total_num_heads)
         # will raise.
         if num_kv_heads is not None:
             if tp_size > num_kv_heads:
